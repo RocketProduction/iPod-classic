@@ -6574,14 +6574,21 @@ Idx (menu/music/songs): ${state.menuIdx}/${state.musicMenuIdx}/${state.songIdx}
         const vh = Math.max(1, window.innerHeight || 1);
         const isLandscape = vw > vh;
 
-        // Enforce portrait only on mobile-like environments or when running as installed PWA.
+        // Detect if running as installed PWA
         const isStandalone = (window.matchMedia && (
             window.matchMedia('(display-mode: standalone)').matches ||
             window.matchMedia('(display-mode: fullscreen)').matches
         )) || !!(window.navigator && window.navigator.standalone);
+        
+        // Detect actual mobile device (not desktop browser in mobile emulation)
         const isMobileUA = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
-        const isUaMobile = ((navigator.userAgentData && navigator.userAgentData.mobile) ? true : false) || isMobileUA;
-        const enforcePortrait = !!(isStandalone || isUaMobile);
+        const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+        const isSmallScreen = Math.min(vw, vh) < 768;
+        
+        // Only enforce portrait on REAL mobile devices, not desktop browsers
+        // Desktop with touch (like Surface) should work in landscape
+        const isRealMobile = isMobileUA && hasTouch && isSmallScreen;
+        const enforcePortrait = isStandalone || isRealMobile;
 
         if (isStandalone) {
             initZoomGuard();
@@ -6868,18 +6875,21 @@ console.log('[iPod] All scripts executed successfully!');
         var ipod = document.getElementById('ipod');
         var overlay = document.getElementById('portraitOnlyOverlay');
         var isLandscape = window.innerWidth > window.innerHeight;
+        var isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
         
         if (ipod) {
-            if (!isLandscape) {
+            // On desktop, always show iPod. On mobile, show only in portrait.
+            if (!isMobile || !isLandscape) {
                 ipod.style.display = '';
                 ipod.style.visibility = 'visible';
                 ipod.style.opacity = '1';
             }
         }
         if (overlay) {
-            overlay.style.display = isLandscape ? 'flex' : 'none';
+            // Only show portrait overlay on mobile devices in landscape
+            overlay.style.display = (isMobile && isLandscape) ? 'flex' : 'none';
         }
-        console.log('[iPod] Final visibility check complete. iPod visible:', ipod ? ipod.style.display !== 'none' : false);
+        console.log('[iPod] Final visibility check complete. isMobile:', isMobile, 'isLandscape:', isLandscape);
     }
     
     // Run after load event
