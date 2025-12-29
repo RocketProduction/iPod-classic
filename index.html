@@ -2041,49 +2041,37 @@ body {
         }
         
         // --- HAPTICS (Chrome/Android) ---
-        // Many devices ignore very short vibrations (< ~12ms) and browsers may rate-limit frequent calls.
-        let _lastVibrateAt = 0;
-        let _lastUserGestureAt = 0;
-        function markUserGesture() { _lastUserGestureAt = performance.now(); }
-        // Capture real user gestures (touch/mouse/key) so vibration calls are allowed.
-        document.addEventListener('pointerdown', markUserGesture, {passive:true});
-        document.addEventListener('touchstart', markUserGesture, {passive:true});
-        document.addEventListener('keydown', markUserGesture, {passive:true});
 
-        function safeVibrate(pattern, minIntervalMs = 50) {
+        function safeVibrate(pattern) {
             try {
                 if (typeof state === 'undefined' || !state.hapticFeedback) return false;
                 if (!navigator || typeof navigator.vibrate !== 'function') return false;
-                if (document.visibilityState !== 'visible') return false;
-
-                const now = performance.now();
-                if (now - _lastVibrateAt < minIntervalMs) return false;
-
-                // Prefer transient user activation when available; fall back to "recent gesture" window.
-                if (navigator.userActivation && !navigator.userActivation.isActive) {
-                    if (now - _lastUserGestureAt > 5000) return false;
-                }
-
-                _lastVibrateAt = now;
-                // Android often ignores vibrations under ~25ms
-                const safePattern = typeof pattern === 'number' ? Math.max(25, pattern) : pattern;
-                return navigator.vibrate(safePattern);
-            } catch (e) { return false; }
+                return navigator.vibrate(pattern);
+            } catch (e) { 
+                return false; 
+            }
         }
 
+        // Throttle for tick haptics only (wheel rotation)
+        let _lastTickHaptic = 0;
+        
         function tickSound() { 
             if (typeof state !== 'undefined' && state.clickSound) {
                 playClick(2200, 0.008, 0.04);
             }
-            // Tick haptics: Android needs at least 25ms to feel
-            safeVibrate(30, 60);
+            // Tick haptics: short pulse for each wheel tick
+            const now = performance.now();
+            if (now - _lastTickHaptic > 80) {
+                _lastTickHaptic = now;
+                safeVibrate(20);
+            }
         }
         function selectSound() { 
             if (typeof state !== 'undefined' && state.clickSound) {
                 playClick(1000, 0.04, 0.12);
             }
-            // Select haptics: more noticeable
-            safeVibrate(50, 30);
+            // Select haptics: stronger pulse on select
+            safeVibrate(50);
         }
 
         // ==================== STATE ====================
@@ -2802,8 +2790,8 @@ body {
                 const dir = wheel.accum > 0 ? 1 : -1;
                 // Apply multiple scroll steps in one move for acceleration effect
                 for (let i = 0; i < steps; i++) {
-                    tickSound();
-                    scroll(dir);
+                    const didScroll = scroll(dir);
+                    if (didScroll) tickSound();
                 }
                 wheel.accum -= dir * steps * threshold;
             }
@@ -2982,11 +2970,12 @@ body {
             if (now - lastWheel < 80) return;
             lastWheel = now;
             initAudio();
-            tickSound();
-            scroll(e.deltaY > 0 ? 1 : -1, true); // true = fromMouseWheel
+            const didScroll = scroll(e.deltaY > 0 ? 1 : -1, true); // true = fromMouseWheel
+            if (didScroll) tickSound();
         }, { passive: false });
 
         // ==================== SCROLL ====================
+        // Returns true if scroll actually happened, false if at boundary
         function scroll(dir, fromMouseWheel = false) {
             let list, items, idxKey;
             
@@ -3017,17 +3006,20 @@ body {
             } else if (state.view === 'eq') {
                 // EQ speciale: preview durante scroll
                 const items = el.eqList.querySelectorAll('.menu-item'); 
-                if (!items || items.length === 0) return;
+                if (!items || items.length === 0) return false;
                 
                 // Safety check per indice
                 if (state.eqIdx < 0) state.eqIdx = 0;
                 if (state.eqIdx >= items.length) state.eqIdx = items.length - 1;
                 
+                // Check boundary
+                const oldIdx = state.eqIdx;
+                const newIdx = Math.max(0, Math.min(items.length - 1, state.eqIdx + dir));
+                if (newIdx === oldIdx) return false;
+                
                 // Rimuovi selezione precedente
                 items.forEach(item => item.classList.remove('selected'));
                 
-                // Calcola nuovo indice
-                const newIdx = Math.max(0, Math.min(items.length - 1, state.eqIdx + dir));
                 state.eqIdx = newIdx;
                 
                 // Applica selezione
@@ -3042,62 +3034,80 @@ body {
                         previewEQProfile(keys[state.eqIdx]);
                     }, 80);
                 }
-                return;
+                return true;
             } else if (state.view === 'eqEdit') {
                 if (state.eqEditMode) {
                     // In edit mode: adjust the band value with clickwheel
                     adjustEQBand(dir * 0.5);
+                    return true;
                 } else {
                     // Navigation mode: move between bands
                     const bands = el.eqEditor.querySelectorAll('.eq-band');
-                    if (!bands || bands.length === 0) return;
+                    if (!bands || bands.length === 0) return false;
                     
                     // Safety check
                     if (state.eqEditIdx < 0) state.eqEditIdx = 0;
                     if (state.eqEditIdx >= bands.length) state.eqEditIdx = bands.length - 1;
                     
+                    // Check boundary
+                    const oldIdx = state.eqEditIdx;
+                    const newIdx = Math.max(0, Math.min(bands.length - 1, state.eqEditIdx + dir));
+                    if (newIdx === oldIdx) return false;
+                    
                     bands.forEach(b => b.classList.remove('selected', 'editing'));
-                    state.eqEditIdx = Math.max(0, Math.min(bands.length - 1, state.eqEditIdx + dir));
+                    state.eqEditIdx = newIdx;
                     bands[state.eqEditIdx].classList.add('selected');
                     bands[state.eqEditIdx].scrollIntoView({ block: 'nearest' });
+                    return true;
                 }
-                return;
             } else if (state.view === 'coverflow') {
-                if (state.albumsCF.length === 0) return;
+                if (state.albumsCF.length === 0) return false;
                 // Smooth scroll: accumula il target e anima passo per passo
                 const newTarget = Math.max(0, Math.min(state.albumsCF.length - 1, state.cfTargetIdx + dir));
                 if (newTarget !== state.cfTargetIdx) {
                     state.cfTargetIdx = newTarget;
                     smoothScrollCF();
+                    return true;
                 }
-                return;
+                return false;
             } else if (state.view === 'nowplaying') {
                 // Scrub mode: clickwheel adjusts track position
                 if (state.npScrubActive) {
                     npAdjustScrub(dir);
-                    return;
+                    return true;
                 }
                 // Invert direction for mouse wheel volume control (wheel up = volume up)
                 const volDir = fromMouseWheel ? -dir : dir;
+                // Check volume boundary
+                const oldVol = state.volume;
                 state.volume = Math.max(0, Math.min(1, state.volume + volDir * 0.05));
+                if (state.volume === oldVol) return false;
                 activeAudio.volume = state.volume;
                 showVolume();
                 saveState();
-                return;
+                return true;
             } else if (state.view === 'keyboard') {
                 scrollKeyboard(dir);
-                return;
+                return true;
             } else if (state.view === 'lyrics') {
                 el.lyricsContent.scrollTop += dir * 30;
-                return;
+                return true;
             }
             
-            if (!items || !items.length) return;
+            if (!items || !items.length) return false;
             
-            items[state[idxKey]].classList.remove('selected');
-            state[idxKey] = Math.max(0, Math.min(items.length - 1, state[idxKey] + dir));
-            items[state[idxKey]].classList.add('selected');
-            items[state[idxKey]].scrollIntoView({ block: 'nearest' });
+            // Check if we're at boundary
+            const currentIdx = state[idxKey];
+            const newIdx = Math.max(0, Math.min(items.length - 1, currentIdx + dir));
+            
+            // If index didn't change, we're at boundary - no feedback
+            if (newIdx === currentIdx) return false;
+            
+            items[currentIdx].classList.remove('selected');
+            state[idxKey] = newIdx;
+            items[newIdx].classList.add('selected');
+            items[newIdx].scrollIntoView({ block: 'nearest' });
+            return true;
         }
         
         // Cover Flow smooth scroll - anima un passo alla volta
@@ -6285,8 +6295,8 @@ e.preventDefault();
             }
             
             switch (e.key) {
-                case 'ArrowUp': tickSound(); scroll(-1); break;
-                case 'ArrowDown': tickSound(); scroll(1); break;
+                case 'ArrowUp': if (scroll(-1)) tickSound(); break;
+                case 'ArrowDown': if (scroll(1)) tickSound(); break;
                 case 'Enter': case ' ': selectSound(); handleSelect(); break;
                 case 'Escape': selectSound(); goBack(); break;
                 case 'Backspace':
