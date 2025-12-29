@@ -2351,9 +2351,10 @@ body {
             if (a === activeAudio && a.duration && isFinite(a.duration) && a.duration > 0) {
                 try {
                     if (navigator.mediaSession && navigator.mediaSession.setPositionState) {
+                        const isPlaying = state.playing && !a.paused;
                         navigator.mediaSession.setPositionState({
                             duration: a.duration,
-                            playbackRate: a.playbackRate || 1,
+                            playbackRate: isPlaying ? 1 : 0,
                             position: Math.max(0, Math.min(a.currentTime || 0, a.duration))
                         });
                     }
@@ -2369,9 +2370,10 @@ body {
             if (a === activeAudio && a.duration && isFinite(a.duration) && a.duration > 0) {
                 try {
                     if (navigator.mediaSession && navigator.mediaSession.setPositionState) {
+                        const isPlaying = state.playing && !a.paused;
                         navigator.mediaSession.setPositionState({
                             duration: a.duration,
-                            playbackRate: a.playbackRate || 1,
+                            playbackRate: isPlaying ? 1 : 0,
                             position: Math.max(0, Math.min(a.currentTime || 0, a.duration))
                         });
                     }
@@ -2387,11 +2389,13 @@ body {
             if (a === activeAudio && a.duration && isFinite(a.duration) && a.duration > 0) {
                 try {
                     if (navigator.mediaSession && navigator.mediaSession.setPositionState) {
+                        // 'playing' event means audio is actually playing, use playbackRate 1
                         navigator.mediaSession.setPositionState({
                             duration: a.duration,
-                            playbackRate: a.playbackRate || 1,
+                            playbackRate: 1,
                             position: Math.max(0, Math.min(a.currentTime || 0, a.duration))
                         });
+                        navigator.mediaSession.playbackState = 'playing';
                     }
                 } catch (e) {}
             }
@@ -3096,12 +3100,20 @@ body {
             
             if (!items || !items.length) return false;
             
-            // Check if we're at boundary
-            const currentIdx = state[idxKey];
-            const newIdx = Math.max(0, Math.min(items.length - 1, currentIdx + dir));
+            // Safety: clamp current index to valid range
+            const maxIdx = items.length - 1;
+            let currentIdx = state[idxKey];
+            if (currentIdx < 0) currentIdx = 0;
+            if (currentIdx > maxIdx) currentIdx = maxIdx;
+            state[idxKey] = currentIdx;
             
-            // If index didn't change, we're at boundary - no feedback
-            if (newIdx === currentIdx) return false;
+            // Calculate new index
+            const newIdx = currentIdx + dir;
+            
+            // Check if we're at boundary - no feedback if can't move
+            if (newIdx < 0 || newIdx > maxIdx) {
+                return false;
+            }
             
             items[currentIdx].classList.remove('selected');
             state[idxKey] = newIdx;
@@ -6697,28 +6709,35 @@ Idx (menu/music/songs): ${state.menuIdx}/${state.musicMenuIdx}/${state.songIdx}
         try {
             if (!navigator.mediaSession || !navigator.mediaSession.setPositionState) return;
             const a = pickPositionAudio();
-            if (!a || !isFinite(a.currentTime) || !isFinite(a.duration) || a.duration <= 0) return;
+            if (!a) return;
+            
+            // Wait for valid audio metadata
+            const dur = a.duration;
+            const cur = a.currentTime;
+            if (!isFinite(dur) || dur <= 0 || !isFinite(cur)) return;
 
             const now = performance.now();
             if (!force && (now - lastPosUpdateTs) < 750) return;
             lastPosUpdateTs = now;
 
-            // Clamp position to valid range to prevent lockscreen glitches
-            const position = Math.max(0, Math.min(a.currentTime, a.duration));
+            // Clamp position to valid range [0, duration]
+            const position = Math.max(0, Math.min(cur, dur));
             
             // CRITICAL: Set playbackRate to 0 when paused to stop progress bar animation
             // Android uses playbackRate to animate the progress bar between updates
-            const isPlaying = typeof state !== 'undefined' && state.playing;
+            const isPlaying = typeof state !== 'undefined' && state.playing && !a.paused;
             
             navigator.mediaSession.setPositionState({
-                duration: a.duration,
-                playbackRate: isPlaying ? (a.playbackRate || 1) : 0,
+                duration: dur,
+                playbackRate: isPlaying ? 1 : 0,
                 position: position
             });
             
             // Also explicitly set playbackState
             navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
-        } catch (e) {}
+        } catch (e) {
+            console.log('[MediaSession] Position update error:', e);
+        }
     }
 
     // Start periodic position updates when playing (fixes stuck progress bar)
