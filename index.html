@@ -1551,10 +1551,12 @@ body {
                 ipod.style.opacity = '1';
                 console.log('[PWA-INIT] iPod forced visible');
             }
-            // Only show portrait overlay in landscape
+            // Only show portrait overlay in landscape ON MOBILE DEVICES
             if (overlay) {
                 var isLandscape = window.innerWidth > window.innerHeight;
-                overlay.style.display = isLandscape ? 'flex' : 'none';
+                var isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
+                               ('ontouchstart' in window && window.innerWidth < 1024);
+                overlay.style.display = (isLandscape && isMobile) ? 'flex' : 'none';
             }
         }
         
